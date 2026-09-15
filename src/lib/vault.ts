@@ -11,17 +11,25 @@ const AUTOLOCK_MS = 10 * 60 * 1000;
 
 interface VaultRecord {
   v: 1;
-  salt: string;      // base64
-  iv: string;        // base64
-  ct: string;        // base64 — зашифрованный PAT
+  salt: string; // base64
+  iv: string; // base64
+  ct: string; // base64 — зашифрованный PAT
   createdAt: number;
 }
 
 function b64(buf: ArrayBuffer): string {
   return btoa(String.fromCharCode(...new Uint8Array(buf)));
 }
+
 function unb64(s: string): Uint8Array {
   return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+}
+
+/** WebCrypto требует ArrayBuffer (не ArrayBufferLike) — приводим явно. */
+function ab(u8: Uint8Array): ArrayBuffer {
+  const out = new ArrayBuffer(u8.byteLength);
+  new Uint8Array(out).set(u8);
+  return out;
 }
 
 function subtle(): SubtleCrypto {
@@ -34,15 +42,12 @@ function subtle(): SubtleCrypto {
 }
 
 async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
-  const base = await subtle().importKey(
-    'raw',
-    new TextEncoder().encode(password),
-    'PBKDF2',
-    false,
-    ['deriveKey'],
-  );
+  const pwBytes = new TextEncoder().encode(password);
+  const base = await subtle().importKey('raw', ab(pwBytes), 'PBKDF2', false, [
+    'deriveKey',
+  ]);
   return subtle().deriveKey(
-    { name: 'PBKDF2', salt, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
+    { name: 'PBKDF2', salt: ab(salt), iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
     base,
     { name: 'AES-GCM', length: 256 },
     false,
@@ -54,15 +59,12 @@ export async function vaultSetup(password: string, pat: string): Promise<void> {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const key = await deriveKey(password, salt);
-  const ct = await subtle().encrypt(
-    { name: 'AES-GCM', iv },
-    key,
-    new TextEncoder().encode(pat),
-  );
+  const pt = new TextEncoder().encode(pat);
+  const ct = await subtle().encrypt({ name: 'AES-GCM', iv: ab(iv) }, key, ab(pt));
   const rec: VaultRecord = {
     v: 1,
-    salt: b64(salt),
-    iv: b64(iv),
+    salt: b64(salt.buffer as ArrayBuffer),
+    iv: b64(iv.buffer as ArrayBuffer),
     ct: b64(ct),
     createdAt: Date.now(),
   };
@@ -76,9 +78,9 @@ export async function vaultUnlock(password: string): Promise<string> {
   const key = await deriveKey(password, unb64(rec.salt));
   try {
     const pt = await subtle().decrypt(
-      { name: 'AES-GCM', iv: unb64(rec.iv) },
+      { name: 'AES-GCM', iv: ab(unb64(rec.iv)) },
       key,
-      unb64(rec.ct),
+      ab(unb64(rec.ct)),
     );
     return new TextDecoder().decode(pt);
   } catch {
@@ -112,7 +114,9 @@ const lockListeners = new Set<() => void>();
 
 export function onLock(cb: () => void): () => void {
   lockListeners.add(cb);
-  return () => lockListeners.delete(cb);
+  return () => {
+    lockListeners.delete(cb);
+  };
 }
 
 export function armAutolock(): void {
