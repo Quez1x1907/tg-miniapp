@@ -7,7 +7,8 @@
 
 const PBKDF2_ITERATIONS = 310_000;
 const STORE_KEY = 'tma_vault_v1';
-const AUTOLOCK_MS = 10 * 60 * 1000;
+const REMEMBER_KEY = 'tma_remember_v1';
+const AUTOLOCK_MS = 12 * 60 * 60 * 1000;
 
 interface VaultRecord {
   v: 1;
@@ -94,6 +95,24 @@ export function vaultExists(): boolean {
 
 export function vaultReset(): void {
   localStorage.removeItem(STORE_KEY);
+  localStorage.removeItem(REMEMBER_KEY);
+}
+
+/**
+ * «Запомнить пароль»: хранит пароль в localStorage устройства, чтобы Mini App
+ * разблокировался сам при открытии. Компромисс удобства: любой, кто владеет
+ * разблокированным устройством, достанет PAT. Включается только галочкой.
+ */
+export function rememberSave(password: string): void {
+  localStorage.setItem(REMEMBER_KEY, password);
+}
+
+export function rememberLoad(): string | null {
+  return localStorage.getItem(REMEMBER_KEY);
+}
+
+export function rememberClear(): void {
+  localStorage.removeItem(REMEMBER_KEY);
 }
 
 /** Сколько PAT хранится (в днях) — напомнить обновить до истечения 90 дней. */

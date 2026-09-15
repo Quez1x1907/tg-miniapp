@@ -8,6 +8,9 @@ import {
   onLock,
   armAutolock,
   disarmAutolock,
+  rememberSave,
+  rememberLoad,
+  rememberClear,
 } from '../lib/vault';
 import { checkToken } from '../lib/gh';
 
@@ -21,6 +24,7 @@ const SetupForm: React.FC<{ onDone: (token: string) => void }> = ({ onDone }) =>
   const [pat, setPat] = useState('');
   const [pass1, setPass1] = useState('');
   const [pass2, setPass2] = useState('');
+  const [remember, setRemember] = useState(true);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
@@ -34,6 +38,7 @@ const SetupForm: React.FC<{ onDone: (token: string) => void }> = ({ onDone }) =>
       const chk = await checkToken(pat.trim());
       if (!chk.ok) throw new Error(chk.reason ?? 'токен не принят');
       await vaultSetup(pass1, pat.trim());
+      if (remember) rememberSave(pass1);
       onDone(pat.trim());
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : String(ex));
@@ -74,6 +79,14 @@ const SetupForm: React.FC<{ onDone: (token: string) => void }> = ({ onDone }) =>
         autoComplete="new-password"
         required
       />
+      <label className="hint" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <input
+          type="checkbox"
+          checked={remember}
+          onChange={(e) => setRemember(e.target.checked)}
+        />
+        Запомнить пароль на этом устройстве (вход без пароля)
+      </label>
       {err && <p className="err">{err}</p>}
       <button type="submit" disabled={busy}>
         {busy ? 'Проверяю токен…' : 'Сохранить и войти'}
@@ -87,6 +100,7 @@ const LockForm: React.FC<{ onUnlock: (token: string) => void; onReset: () => voi
   onReset,
 }) => {
   const [pass, setPass] = useState('');
+  const [remember, setRemember] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const days = vaultAgeDays();
@@ -97,6 +111,7 @@ const LockForm: React.FC<{ onUnlock: (token: string) => void; onReset: () => voi
     setBusy(true);
     try {
       const token = await vaultUnlock(pass);
+      if (remember) rememberSave(pass);
       onUnlock(token);
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : String(ex));
@@ -120,6 +135,14 @@ const LockForm: React.FC<{ onUnlock: (token: string) => void; onReset: () => voi
         autoFocus
         required
       />
+      <label className="hint" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <input
+          type="checkbox"
+          checked={remember}
+          onChange={(e) => setRemember(e.target.checked)}
+        />
+        Запомнить пароль на этом устройстве
+      </label>
       {err && <p className="err">{err}</p>}
       <button type="submit" disabled={busy}>
         {busy ? '…' : 'Разблокировать'}
@@ -134,10 +157,6 @@ const LockForm: React.FC<{ onUnlock: (token: string) => void; onReset: () => voi
 const Gate: React.FC<Props> = ({ onUnlocked }) => {
   const [stage, setStage] = useState<Stage>('loading');
 
-  useEffect(() => {
-    setStage(vaultExists() ? 'lock' : 'setup');
-  }, []);
-
   const handleUnlocked = useCallback(
     (token: string) => {
       armAutolock();
@@ -145,6 +164,33 @@ const Gate: React.FC<Props> = ({ onUnlocked }) => {
     },
     [onUnlocked],
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    const boot = async () => {
+      if (!vaultExists()) {
+        setStage('setup');
+        return;
+      }
+      const saved = rememberLoad();
+      if (saved) {
+        try {
+          const token = await vaultUnlock(saved);
+          if (!cancelled) {
+            handleUnlocked(token);
+            return;
+          }
+        } catch {
+          rememberClear();
+        }
+      }
+      if (!cancelled) setStage('lock');
+    };
+    void boot();
+    return () => {
+      cancelled = true;
+    };
+  }, [handleUnlocked]);
 
   useEffect(() => {
     const un = onLock(() => {
